@@ -87,7 +87,7 @@ Multiple sign conventions are in play (phase correlation vs. SimpleITK Euler2D v
 
 ## License
 
-No formal license yet. Treat as source-available for reference and educational purposes only until a license is added.
+Licensed under the **Apache License, Version 2.0**. See [`LICENSE`](LICENSE) for the full text.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
@@ -97,6 +97,8 @@ This software is for **research and educational purposes only**.
 It is **NOT** intended for clinical use, diagnosis, or treatment.
 
 The authors assume no responsibility for any use of this code in medical or clinical environments.
+
+By using this software, you agree that you are solely responsible for ensuring compliance with any applicable laws or regulations in your jurisdiction, including but not limited to medical device regulations (ANVISA, FDA, CE-MDR, PMDA, and equivalents).
 
 ## Acknowledgements
 
