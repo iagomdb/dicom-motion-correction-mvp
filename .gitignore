@@ -1,0 +1,44 @@
+# DICOM data — never commit patient data, even anonymized
+dicom_example/
+*.dcm
+*.DCM
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments (should live in D:\dicom_mc\venv anyway)
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local config
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build / cache outputs
+build/
+dist/
+*.egg
+
+# Test artifacts
+D:/dicom_mc/
+synthetic_demo.png
+benchmark_*.py
