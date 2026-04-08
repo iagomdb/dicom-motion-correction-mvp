@@ -19,11 +19,12 @@ CBCT scans suffer from inter-slice misalignment caused by patient micro-motion d
   - mean rotation error: **0.52°**
   - max rotation error: 1.72°
 - **GPU phase correlation alone** recovers translations to **< 0.2 px** error.
-- **Real DICOM header inspection** confirmed on a Teeth 0.07 mm scan (720×720×720, uncompressed, axial, 12 bits stored in 16 allocated, isocenter ≈ image center).
+- **DICOM header parsing** verified against a dental phantom scan (Teeth-class FOV, 0.07 mm isotropic, 720×720×720, uncompressed, axial, 12 bits stored in 16 allocated). No patient data was used at any point in this project.
+- **No clinical validation has been performed.** All recovery-error numbers above come from a synthetic algorithmic phantom with known injected motion. They measure algorithmic correctness, not clinical performance.
 
 ## What does not work / was not finished
 
-- **Full-volume real DICOM run** was never completed end-to-end. Blocked by the performance ceiling below.
+- **Full-volume end-to-end run** on the dental phantom was never completed. Blocked by the performance ceiling below.
 - `metrics.py` and `report.py` were never written.
 - `main.py` CLI is partially implemented.
 - The `save_corrected_series` pixel clipping does not account for `BitsStored < BitsAllocated` (known TODO, deliberately left unfixed).
@@ -95,6 +96,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 This software is for **research and educational purposes only**.
 It is **NOT** intended for clinical use, diagnosis, or treatment.
+
+**No clinical validation has been performed.** All testing was conducted on synthetic algorithmic phantoms and a dental QA phantom.
 
 The authors assume no responsibility for any use of this code in medical or clinical environments.
 
