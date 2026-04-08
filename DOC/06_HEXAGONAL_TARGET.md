@@ -1,11 +1,12 @@
-# Target: Hexagonal Architecture
+# Target: Hexagonal Architecture (cancelled — historical)
 
-Migration from the current flat package. Goal: isolate the registration **domain** from infrastructure (DICOM I/O, GPU runtime, CLI, reports) so that:
+> **Status:** this migration plan was drafted but never executed. It is kept as a historical reference. The project remained on the flat package layout described in `03_ARCHITECTURE_NOW.md`.
+
+Motivation for the plan at the time of writing: isolate the registration domain from infrastructure (DICOM I/O, GPU runtime, CLI, reports) so that:
 
 - Domain logic is testable without files, GPU, or SimpleITK installed.
-- Backends (CPU vs GPU; SimpleITK vs ITK-GPU vs custom) are swappable.
-- I/O formats (DICOM today; NIfTI/PNG-stack tomorrow) are swappable.
-- Multiple Claude agents can work in parallel on adapters without touching the core.
+- Backends (CPU vs GPU; SimpleITK vs custom) are swappable.
+- I/O formats (DICOM today; NIfTI / PNG stack later) are swappable.
 
 ## Layers
 
@@ -26,8 +27,8 @@ Migration from the current flat package. Goal: isolate the registration **domain
 │   pure: Volume, Slice, Reference, Correction,        │
 │   MotionLimits, Profile                              │
 │   policies: rejection rules, threshold checks         │
-│   NO numpy in signatures (only inside method bodies   │
-│   if unavoidable). NO sitk, NO cupy, NO pydicom.      │
+│   No numpy in signatures (only inside method bodies   │
+│   if unavoidable). No sitk, no cupy, no pydicom.      │
 └────────────────────────▲─────────────────────────────┘
                          │ implements
 ┌────────────────────────┴─────────────────────────────┐
@@ -77,7 +78,7 @@ dicom_motion_correction/
 │   ├── reference_mean/     mean-of-k-central impl
 │   ├── masker_otsu/        Otsu body mask impl
 │   └── report_mpl/         matplotlib report impl
-├── synthetic/              test data (not part of runtime, kept here for now)
+├── synthetic/              test data generator
 │   ├── phantom.py
 │   └── motion.py
 ├── composition_root.py     wires adapters → ports → use cases
@@ -85,9 +86,9 @@ dicom_motion_correction/
     └── main.py             argparse, calls composition_root
 ```
 
-## Mapping from current code
+## Mapping from flat layout to hexagonal
 
-| Current file | Goes to |
+| Flat file | Hexagonal target |
 |---|---|
 | `config.py::TeethProfile` | `domain/types.py::Profile` (frozen dataclass) |
 | `config.py::get_profile` | `composition_root.py` (config selection is wiring, not domain) |
@@ -100,11 +101,11 @@ dicom_motion_correction/
 | `registration.py::correct_volume` | `application/correct_volume.py::CorrectVolumeUseCase` (orchestration only, no math) |
 | `synthetic.py` | `synthetic/phantom.py` + `synthetic/motion.py` |
 
-## Domain types (sketch)
+## Domain type sketch
 
 ```python
 # domain/types.py — pure stdlib + dataclasses, no numpy in public types
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class MotionLimits:
@@ -136,9 +137,9 @@ class Correction:
     rejected_reason: str | None
 ```
 
-`Volume` and `Slice` are slightly different — they need to carry pixel data, which is unavoidably numpy. Decision: allow `numpy.ndarray` as a domain primitive (treat it like `bytes`), but never `cupy.ndarray`, never `sitk.Image`, never `pydicom.Dataset` in domain signatures.
+`Volume` and `Slice` are slightly different — they need to carry pixel data, which is unavoidably `numpy.ndarray`. Decision: allow `numpy.ndarray` as a domain primitive (treat it like `bytes`), but never `cupy.ndarray`, never `sitk.Image`, never `pydicom.Dataset` in domain signatures.
 
-## Port examples
+## Port sketches
 
 ```python
 # ports/registrar.py
@@ -176,22 +177,12 @@ class ComputeBackendPort(Protocol):
 
 Keeps phase correlation portable — its body uses only `ComputeBackendPort`, no `import cupy`.
 
-## Migration order (suggested for parallel agents)
+## Architectural constraints (had the migration proceeded)
 
-Each step is independent of the next as long as the domain types land first. Multiple agents can claim non-overlapping bullets.
+- Use `typing.Protocol` (PEP 544 structural typing), not `abc.ABC`. Adapters do not need to inherit — matching signatures are enough.
+- No `import cupy`, no `import SimpleITK`, no `import pydicom` outside `adapters/`. Enforceable later via `import-linter`.
+- Domain never imports from ports, application, or adapters. Ports never import from application or adapters. Application imports domain + ports only. Adapters import domain + ports only.
 
-1. **Foundation (1 agent, blocking):** create `domain/types.py`, `domain/policies.py`, `domain/errors.py`, `ports/*.py`. No behavior — just types and Protocols. Until this lands, nothing else can import from domain/ports.
-2. **Synthetic move (1 agent):** copy `synthetic.py` into `synthetic/phantom.py` + `synthetic/motion.py`. No logic changes. Old file stays until step 7.
-3. **Compute adapters (1 agent):** port `gpu_backend.py` into `adapters/compute_cupy/` and `adapters/compute_numpy/` implementing `ComputeBackendPort`. New name, narrower API.
-4. **DICOM I/O adapters (1 agent):** move `dicom_io.py` into `adapters/io_dicom/`, split read/write, implement ports. Add a fake adapter `adapters/io_memory/` for tests.
-5. **Registrar adapter (1 agent, depends on step 1 + 3):** port `register_slice` into `adapters/registrar_sitk/`. **This is also where B1 from `05_STATUS.md` should be fixed** — the cleanup of moving the boundary code into one focused file is the right time to debug the sign convention.
-6. **Masker + Reference adapters (1 agent):** trivial extracts.
-7. **Application + composition root (1 agent, depends on all above):** write `CorrectVolumeUseCase`, `composition_root.py`, `cli/main.py`. Delete the old flat files (`config.py`, `gpu_backend.py`, `dicom_io.py`, `registration.py`) only after the new pipeline produces the same recovery error on the synthetic phantom.
-8. **Validation (1 agent):** add a real test (`tests/test_registration_recovery.py`) that runs `ValidateSyntheticUseCase` and asserts mean error < 0.1 px / 0.1°.
+## Why it was cancelled
 
-## Rules during migration
-
-- Old files keep working until step 7. No half-broken state on main.
-- Each step ends with `python -m dicom_motion_correction.synthetic` still producing the demo PNG (regression smoke test).
-- Use `Protocol` (PEP 544 structural typing), not `ABC`. Adapters don't need to inherit, they just need matching signatures.
-- No `import cupy`, no `import SimpleITK`, no `import pydicom` outside `adapters/`. Enforced by convention; can be enforced by `import-linter` later.
+See `05_STATUS.md` for the full pause rationale. Short version: the CPU-bound performance ceiling of SimpleITK Mattes MI made further investment in the current pipeline uneconomical, and a GPU-native or deep-learning replacement would be a new project rather than a refactor. Restructuring a pipeline that is itself being replaced had no payoff.

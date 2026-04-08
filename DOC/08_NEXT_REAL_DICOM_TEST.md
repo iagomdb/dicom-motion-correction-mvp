@@ -1,126 +1,119 @@
-# Next Step: First Real DICOM Test
+# Real DICOM Test Plan (partially executed)
 
-**Goal:** take the MVP from "works on synthetic phantom" to "produced a corrected DICOM series from a real Teeth 0.07 mm CBCT scan". This is the first reality check.
+> **Status:** phase A (header inspection) was executed. Phase B (CLI + full-volume run) was started but not completed before the project was paused. See `05_STATUS.md` for the performance-ceiling blocker that prevented completion.
 
-**Input location:** `./dicom_example/` (relative to project root). User will place a real uncompressed Teeth 0.07 mm CBCT series there.
+**Goal:** take the MVP from "works on synthetic phantom" to "produced a corrected DICOM series from a real Teeth 0.07 mm CBCT scan". This was the first reality check.
 
-**Do NOT** start the hexagonal migration. It is cancelled. Work directly on the current flat package.
+**Input location:** `./dicom_example/` (relative to project root), not committed to the repository (see `.gitignore`).
 
-## Prereqs (verify before touching code)
+## Prerequisites
 
-- `DOC/05_STATUS.md` — B1 is resolved. Registration is working on synthetic (0.87 px mean error). B2 (missing curand/cublas) is irrelevant here — we only use cufft, already installed.
-- `DOC/07_PHYSICS_AND_MOTION_MODEL.md` — contains geometry hypotheses that MUST be confirmed against the real DICOM headers before trusting registration output. The checklist at the top of that file is step 1 of this task.
+- `DOC/05_STATUS.md` — registration pipeline validated on synthetic phantom after B1 resolution.
+- `DOC/07_PHYSICS_AND_MOTION_MODEL.md` — geometry hypotheses that must be confirmed against real DICOM headers before trusting registration output.
 
-## Phase A — Header inspection (5 min, no code changes)
+## Phase A — Header inspection
 
-Before writing anything, run this one-liner and paste the output into a comment on `DOC/05_STATUS.md` under a new section "Real DICOM inspection":
+Before running the pipeline, inspect a representative DICOM file from the series and confirm the geometric and encoding assumptions the pipeline relies on.
 
-```bash
-"D:/dicom_mc/venv/Scripts/python.exe" -c "
-import pydicom, os, glob
+```python
+import pydicom, glob
 files = sorted(glob.glob('dicom_example/*'))
 print(f'{len(files)} files')
 ds = pydicom.dcmread(files[0])
-for tag in ['Modality','Manufacturer','SeriesDescription','Rows','Columns',
-            'PixelSpacing','SliceThickness','ImageOrientationPatient',
-            'ImagePositionPatient','BitsAllocated','BitsStored','HighBit',
-            'PixelRepresentation','RescaleSlope','RescaleIntercept',
-            'NumberOfFrames','TransferSyntaxUID']:
-    v = getattr(ds, tag, '<missing>')
-    if tag == 'TransferSyntaxUID':
-        v = ds.file_meta.get('TransferSyntaxUID', '<missing>')
-    print(f'  {tag}: {v}')
+for tag in ['Modality', 'Manufacturer', 'SeriesDescription', 'Rows', 'Columns',
+            'PixelSpacing', 'SliceThickness', 'ImageOrientationPatient',
+            'ImagePositionPatient', 'BitsAllocated', 'BitsStored', 'HighBit',
+            'PixelRepresentation', 'RescaleSlope', 'RescaleIntercept',
+            'NumberOfFrames']:
+    print(f'  {tag}: {getattr(ds, tag, "<missing>")}')
+print(f'  TransferSyntaxUID: {ds.file_meta.get("TransferSyntaxUID", "<missing>")}')
 ds_last = pydicom.dcmread(files[-1])
-print('first ipp z:', ds.ImagePositionPatient[2] if hasattr(ds,'ImagePositionPatient') else '?')
-print('last  ipp z:', ds_last.ImagePositionPatient[2] if hasattr(ds_last,'ImagePositionPatient') else '?')
-print('px dtype:', ds.pixel_array.dtype, 'shape:', ds.pixel_array.shape)
-print('px min/max:', ds.pixel_array.min(), ds.pixel_array.max())
-" 2>&1
+print(f'first ipp z: {ds.ImagePositionPatient[2]}')
+print(f'last  ipp z: {ds_last.ImagePositionPatient[2]}')
+print(f'px dtype: {ds.pixel_array.dtype}, shape: {ds.pixel_array.shape}')
+print(f'px min/max: {ds.pixel_array.min()}, {ds.pixel_array.max()}')
 ```
 
-Then answer these questions by comparing against `DOC/07`:
+Validation questions to answer from the output:
 
 1. Is `ImageOrientationPatient` == `[1, 0, 0, 0, 1, 0]`? (axial, no tilt)
 2. Is `PixelSpacing` isotropic and near 0.07 mm?
-3. Is `TransferSyntaxUID` one of the uncompressed ones (`1.2.840.10008.1.2`, `1.2.840.10008.1.2.1`, `1.2.840.10008.1.2.2`)? If it's JPEG2000 or RLE, **stop** and tell the user — current code cannot handle compressed pixel data.
-4. Is `NumberOfFrames` absent or 1? If multi-frame, **stop** and tell the user.
+3. Is `TransferSyntaxUID` one of the uncompressed ones (`1.2.840.10008.1.2`, `1.2.840.10008.1.2.1`, `1.2.840.10008.1.2.2`)? Compressed pixel data is not supported by the current save path.
+4. Is `NumberOfFrames` absent or 1? Multi-frame DICOM is not supported.
 5. Is `PixelRepresentation` 1 (signed) or 0 (unsigned)?
-6. Is `BitsStored` < `BitsAllocated`? Record both values — `dicom_io.save_corrected_series` currently clips to the full int16 range which is wrong if `BitsStored < 16`; this is a known gap in the save path (not yet fixed, intentional — wait for real data before changing clipping logic).
-7. Does central-slice `ImagePositionPatient[0]` and `[1]` sit near the image center (`(Columns-1)/2 * PixelSpacing[1]` etc. from IPP) or is the isocenter meaningfully offset? Compute `iso_col = -ipp[0]/PixelSpacing[1]`, `iso_row = -ipp[1]/PixelSpacing[0]` and report.
+6. Is `BitsStored` < `BitsAllocated`? The current `save_corrected_series` clips to the full int16 range, which is technically incorrect if `BitsStored < 16`. Known gap in the save path.
+7. Does the central slice `ImagePositionPatient[0]` and `[1]` sit near the image center? Compute `iso_col = -ipp[0]/PixelSpacing[1]`, `iso_row = -ipp[1]/PixelSpacing[0]` and compare to `Columns/2`, `Rows/2`.
 
-**If any answer violates the hypothesis, do NOT proceed to Phase B.** Report findings and stop. The algorithm assumes the hypothesis holds.
+**If any answer violates the working hypothesis in `DOC/07`, the pipeline should not be run on that volume** — the geometric assumptions baked into `register_slice` would no longer hold.
 
-## Phase B — Minimal CLI (~80 lines, `main.py`)
+### Results recorded from the actual run
 
-Write `dicom_motion_correction/main.py`. No feature creep.
+- Volume: 720 slices, 720×720, 0.07 mm isotropic
+- Uncompressed, axial (`IOP=[1,0,0,0,1,0]`), single-frame
+- PixelRepresentation: signed
+- **BitsAllocated=16, BitsStored=12** — matches prior domain expectation, not yet handled in the save path
+- Isocenter at (360, 360), essentially coinciding with the image center (359.5, 359.5)
 
-**Signature:**
+## Phase B — Minimal CLI (`main.py`)
+
+CLI signature:
+
 ```
 python -m dicom_motion_correction.main --input <dir> --output <dir> [--dry-run] [--cpu]
 ```
 
-**Required behavior:**
-1. `argparse` with only those 4 flags. No profile selection (only `teeth_007` exists), no threshold overrides, no report flag (yet).
-2. Validate `--input` exists and has `.dcm` files. Validate `--output` does not exist OR is empty (refuse to overwrite — clinical safety).
-3. Call `dicom_io.load_dicom_series(input_dir)` → datasets, volume, info.
-4. Print a one-block header:
-   ```
-   Input:  <dir>
-   Series: <N> slices | <rows>x<cols> | voxel: <pixel_spacing> mm | modality: <...>
-   Backend: <GPUBackend.summary()>
-   ```
-5. Extract `pixel_spacing_mm = float(info['pixel_spacing'][0])` (assume isotropic — error if not).
+Required behavior:
+
+1. `argparse` with only these four flags.
+2. Validate that `--input` exists and contains `.dcm` files. Validate that `--output` does not exist or is empty (refuse to overwrite — clinical safety).
+3. Call `dicom_io.load_dicom_series(input_dir)`.
+4. Print a header block with the series info and backend summary.
+5. Extract `pixel_spacing_mm` from the series info (assume isotropic — error if not).
 6. Instantiate `GPUBackend(force_cpu=args.cpu)`.
-7. Call `correct_volume(volume, profile, backend, pixel_spacing_mm, progress_callback=tqdm_callback)`.
-8. Compute summary from the corrections list:
-   - Count `was_corrected=True`
-   - Count `rejected_reason="exceeds_limits"`
-   - Count `rejected_reason="below_threshold"`
-   - Count `rejected_reason="reference"`
-   - Mean and max |translation| in px AND mm, mean and max |rotation| in deg
-   - Mean metric improvement (before - after; MI is minimized so positive is better)
-9. Print the summary block.
-10. If `--dry-run`: stop here. Otherwise: `save_corrected_series(datasets, corrected, output_dir, correction_metadata)` where `correction_metadata` is a dict with: timestamp, profile name, tool version from `__init__.__version__`, counts from step 8, and the per-slice list of `(slice_index, rot, tx_px, ty_px, was_corrected, rejected_reason)` as JSON-serializable rows.
+7. Call `correct_volume(...)` with a `tqdm`-backed progress callback.
+8. Compute summary counts from the `corrections` list:
+   - `was_corrected=True` count
+   - Rejected reasons: `exceeds_limits`, `below_threshold`, `reference`
+   - Mean and max translation magnitude in px and mm
+   - Mean and max rotation in degrees
+   - Mean metric improvement (`before - after`; positive means better fit)
+9. Print the summary.
+10. If `--dry-run`: stop. Otherwise call `save_corrected_series(datasets, corrected, output_dir, metadata)`, where `metadata` is a JSON-serializable dict containing: timestamp, profile name, tool version, summary counts, per-slice list of `(slice_index, rot, tx_px, ty_px, was_corrected, rejected_reason)`.
 11. Call `validate_saved_series(output_dir, N)` and print `OK` or the first error.
-12. Print the experimental warning required by `DOC/01_PURPOSE.md`:
-    ```
-    WARNING: This tool is experimental. Results must be validated by a qualified
-    professional before any diagnostic use.
-    ```
+12. Print the experimental-use warning required by `DOC/01_PURPOSE.md`.
 
-**Hard constraints:**
+### Implementation constraints
+
 - Use `pathlib.Path` throughout.
-- No logging framework. Plain `print`. This is a CLI.
-- No `try/except` around the core pipeline — let it crash with a traceback if registration or I/O fails. The only `try/except` allowed is around `validate_saved_series` at the very end (post-write validation is the one place an error should not mask the successful write).
-- `progress_callback` for `correct_volume`: use `tqdm` wrapping `range(N)`. Callback signature is `(current, total)` per `registration.py`. Use `tqdm.update(1)` per call.
-- Do NOT modify `dicom_io.save_corrected_series` bit-clipping logic yet. If Phase A revealed `BitsStored < BitsAllocated`, note it in the status doc and leave a `# TODO bit clipping` comment at the call site. Do not fix it in this pass — fixing requires confirming with the user first (see memory note on pixel format authority).
+- Plain `print`, no logging framework. This is a CLI.
+- Do not wrap the core pipeline in `try`/`except`. Let failures surface with a traceback. The only exception is around `validate_saved_series` at the very end (post-write validation should not mask a successful write).
+- `tqdm` wraps `range(N)`; callback signature is `(current, total)`.
+- Do not modify `dicom_io.save_corrected_series` bit-clipping behavior as part of this task. If phase A revealed `BitsStored < BitsAllocated`, leave a TODO at the call site and document in `05_STATUS.md`.
 
-## Phase C — Run it (the moment of truth)
+## Phase C — Dry-run sanity check
 
-```bash
-cd "c:/Users/iago/Desktop/Geral/VS CODE/Dicom"
-"D:/dicom_mc/venv/Scripts/python.exe" -m dicom_motion_correction.main --input dicom_example --output D:/dicom_mc/data/teeth_first_run --dry-run
+```
+python -m dicom_motion_correction.main --input dicom_example --output <out-dir> --dry-run
 ```
 
-Dry-run first. Confirm the summary looks sane:
-- Number of corrected slices should be nonzero but less than total (if every slice is "corrected" there is probably a bug).
-- Rejected-exceeds-limits count should be 0 or near 0 for a normal scan. A high count means either the scan is garbage or the algorithm is misbehaving.
-- Max translation should be within `max_translation_mm` of the profile (1.4 mm). Anything larger means the safety gate fired and is fine.
-- Mean metric improvement should be **positive** (MI is minimized by SimpleITK, so `before - after > 0` means the fit got better).
+Expected shape of the summary:
 
-**If any of those look off, STOP and write findings in `DOC/05_STATUS.md`. Do not run without `--dry-run` until the dry-run output is plausible.**
+- **Corrected slices**: nonzero but significantly less than total. A 100% "corrected" ratio would indicate a bug (no slice should be below the motion threshold).
+- **Rejected by `exceeds_limits`**: 0 or near 0 on a healthy scan. A high count indicates either a damaged scan or a misbehaving algorithm.
+- **Max translation**: within the profile's `max_translation_mm` (1.4 mm default). Values larger than this are rejected by the safety gate.
+- **Mean metric improvement**: positive. SimpleITK minimizes MI, so `before - after > 0` indicates the fit improved.
 
-Then drop `--dry-run` and run again to actually write the output series. Open one slice from the output in any DICOM viewer to confirm it loads. Compare visually to the same slice in the input.
+If any of these checks fail, the dry run should be investigated before dropping `--dry-run`.
 
-## Phase D — Report findings
+## Phase D — Report template
 
-Append a new section to `DOC/05_STATUS.md`:
+Append to `DOC/05_STATUS.md` once the run completes end-to-end:
 
 ```
 ## First real DICOM run (YYYY-MM-DD)
 
 ### Header inspection
-<paste Phase A output + answers to the 7 questions>
+<phase A output + answers to the 7 questions>
 
 ### Hypothesis status
 - Geometry (IOP, isotropic, uncompressed, single-frame): [confirmed | violated with details]
@@ -142,23 +135,10 @@ Append a new section to `DOC/05_STATUS.md`:
 <any surprises, viewer compatibility, visual quality, suspected issues>
 ```
 
-Update the "Working" table: add a row `dicom_io.load_dicom_series / save_corrected_series` with evidence = "produced valid output from real Teeth scan, N slices".
-
 ## Out of scope for this task
 
-- `metrics.py` — do not write it. Phase D uses inline computation from the corrections list.
-- `report.py` — do not write it. Visual report comes after real data is validated.
-- Bit-stored clipping fix — do not touch. Flag only.
-- Any change to `registration.py` — B1 is resolved, do not re-litigate the sign conventions.
-- Hexagonal refactor — cancelled, ignore `DOC/06`.
-
-## Claim marker
-
-Before starting, add to `DOC/05_STATUS.md` Active work section:
-```
-- [in progress] main.py + first real DICOM test — <agent tag> — YYYY-MM-DD
-```
-When done, replace with:
-```
-- [done] main.py + first real DICOM test — see "First real DICOM run" section below
-```
+- `metrics.py` — phase D uses inline computation from the corrections list.
+- `report.py` — visual report comes after real-data validation is stable.
+- Bit-stored clipping fix — flag only, not fix.
+- Changes to `registration.py` — B1 is resolved; do not re-litigate the sign conventions.
+- Hexagonal refactor — see `06_HEXAGONAL_TARGET.md` (cancelled).
